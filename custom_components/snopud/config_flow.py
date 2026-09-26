@@ -77,9 +77,11 @@ class SnoPUDConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                     },
                 )
+        # Keep the email after an error, but never send the password back.
+        suggested = {CONF_USERNAME: user_input[CONF_USERNAME]} if user_input else None
         return self.async_show_form(
             step_id="user",
-            data_schema=self.add_suggested_values_to_schema(USER_SCHEMA, user_input),
+            data_schema=self.add_suggested_values_to_schema(USER_SCHEMA, suggested),
             errors=errors,
         )
 
