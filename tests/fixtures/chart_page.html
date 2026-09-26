@@ -1,0 +1,22 @@
+<div class="chartControlContainer clearfix">
+  <form action="~/Dashboard/Chart" method="POST" class="jsAjaxChartChange chartControlForm form-inline" id="chartControlForm">
+    <input name="__RequestVerificationToken" type="hidden" value="test-chart-token" />
+    <ul class="layout">
+      <li class="SERVICE_1 setServiceTypeChartButton" data-value="1"><a href="#">Electric</a></li>
+      <li class="SERVICE_2 setServiceTypeChartButton" data-value="2"><a href="#">Water</a></li>
+    </ul>
+    <select id="StorageType" name="UsageInterval">
+      <option value="5" INTERVAL_5>Hourly</option>
+      <option value="6" INTERVAL_6>Daily</option>
+      <option value="7" INTERVAL_7>Billing</option>
+    </select>
+    <select id="UsageType" name="UsageType">
+      <option value="1" TYPE_1>Consumption (CF)</option>
+      <option value="3" TYPE_3>Dollar ($)</option>
+    </select>
+  </form>
+  <form class="jsAjaxChartChangeMeters chartControlForm meterFilterForm">
+    <input type="checkbox" name="meterIds" value="[&quot;0_0_\&quot;1000001\&quot;_3_0_\&quot;\&quot;__0&quot;]" checked />
+    <input type="hidden" name="meterIds" value="-1" />
+  </form>
+</div>

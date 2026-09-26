@@ -16,8 +16,10 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 )
 
 from custom_components.snopud.api import (
+    Bill,
     CannotConnect,
     InvalidAuth,
+    PortalError,
     Property,
     ServiceType,
     UsageRead,
@@ -28,6 +30,7 @@ CLIENT = "custom_components.snopud.coordinator.SnoPUDClient"
 ELEC = "snopud:2000002_electric_consumption"
 ELEC_COST = "snopud:2000002_electric_cost"
 WATER = "snopud:2000002_water_consumption"
+WATER_COST = "snopud:2000002_water_cost"
 
 
 def hours(start: datetime, values: list[float], cost: bool) -> list[UsageRead]:
@@ -60,6 +63,7 @@ def client():
     with patch(CLIENT, autospec=True) as cls:
         api = cls.return_value
         api.properties = [Property(id="2000002", name="Main House")]
+        api.async_get_bills.return_value = []
         yield api
 
 
@@ -150,3 +154,107 @@ async def test_connection_failure_retries_later(
     client.async_login.side_effect = CannotConnect("down")
     assert not await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.SETUP_RETRY
+
+
+async def test_water_cost_from_bills(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    client,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Water cost uses the bill rate, and a new bill prices its hours again."""
+    freezer.move_to("2026-09-25 20:00:00+00:00")
+    start = datetime(2026, 9, 20, 7, tzinfo=UTC)  # midnight local time
+    water = hours(start, [2.0] * 48, cost=False)
+    client.async_get_usage = AsyncMock(
+        side_effect=lambda s, *a: water if s is ServiceType.WATER else []
+    )
+    # One closed bill at 0.10 per cubic foot. All 48 hours come after it.
+    client.async_get_bills.return_value = [
+        Bill(date(2026, 8, 6), date(2026, 9, 5), 100.0, 1000.0)
+    ]
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    stats = await _stats(hass, {WATER_COST})
+    assert len(stats[WATER_COST]) == 48
+    assert stats[WATER_COST][0]["state"] == pytest.approx(0.2)
+    assert stats[WATER_COST][-1]["sum"] == pytest.approx(9.6)
+
+    # The next bill closes on 9/20 at 0.20 per cubic foot. The update goes
+    # back to that bill's start and prices those hours again.
+    client.async_get_bills.return_value.append(
+        Bill(date(2026, 9, 6), date(2026, 9, 20), 60.0, 300.0)
+    )
+    client.async_get_usage.reset_mock()
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    water_call = next(
+        c.args
+        for c in client.async_get_usage.call_args_list
+        if c.args[0] is ServiceType.WATER
+    )
+    assert water_call[1] == date(2026, 9, 6)
+    stats = await _stats(hass, {WATER_COST})
+    assert len(stats[WATER_COST]) == 48
+    assert stats[WATER_COST][0]["state"] == pytest.approx(0.4)
+    assert stats[WATER_COST][-1]["sum"] == pytest.approx(19.2)
+
+
+async def test_water_cost_backfills_when_new(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    client,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """After an upgrade, the new cost statistic gets the full history."""
+    freezer.move_to("2026-09-25 20:00:00+00:00")
+    start = datetime(2026, 9, 20, 7, tzinfo=UTC)
+    water = hours(start, [2.0] * 48, cost=False)
+    client.async_get_usage = AsyncMock(
+        side_effect=lambda s, *a: water if s is ServiceType.WATER else []
+    )
+    # First run without bills, like version 0.1: consumption only.
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert WATER_COST not in await _stats(hass, {WATER_COST})
+
+    client.async_get_bills.return_value = [
+        Bill(date(2026, 8, 6), date(2026, 9, 5), 100.0, 1000.0)
+    ]
+    client.async_get_usage.reset_mock()
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    water_call = next(
+        c.args
+        for c in client.async_get_usage.call_args_list
+        if c.args[0] is ServiceType.WATER
+    )
+    assert water_call[1] == date(2025, 9, 25)
+    stats = await _stats(hass, {WATER, WATER_COST})
+    assert stats[WATER][-1]["sum"] == pytest.approx(96.0)
+    assert stats[WATER_COST][-1]["sum"] == pytest.approx(9.6)
+
+
+async def test_water_cost_failure_keeps_consumption(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    client,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """If the chart fails, water consumption still imports."""
+    freezer.move_to("2026-09-25 20:00:00+00:00")
+    start = datetime(2026, 9, 20, 7, tzinfo=UTC)
+    water = hours(start, [2.0] * 48, cost=False)
+    client.async_get_usage = AsyncMock(
+        side_effect=lambda s, *a: water if s is ServiceType.WATER else []
+    )
+    client.async_get_bills.side_effect = PortalError("chart changed")
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    stats = await _stats(hass, {WATER, WATER_COST})
+    assert stats[WATER][-1]["sum"] == pytest.approx(96.0)
+    assert WATER_COST not in stats

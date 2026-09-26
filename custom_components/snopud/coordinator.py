@@ -27,6 +27,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import EnergyConverter, VolumeConverter
 
 from .api import (
+    Bill,
     CannotConnect,
     ExtraLoginStep,
     InvalidAuth,
@@ -34,6 +35,7 @@ from .api import (
     Property,
     ServiceType,
     SnoPUDClient,
+    price_reads,
 )
 from .const import (
     BACKFILL_DAYS,
@@ -133,10 +135,30 @@ class SnoPUDCoordinator(DataUpdateCoordinator[SnoPUDData]):
             last_start = None
             first_day = today - timedelta(days=BACKFILL_DAYS)
 
+        # The water CSV has no cost, so water cost comes from the bills.
+        bills: list[Bill] = []
+        if service is ServiceType.WATER:
+            try:
+                bills = await self.api.async_get_bills(service)
+            except PortalError as err:
+                _LOGGER.warning("Water cost is not available: %s", err)
+        if bills and last:
+            has_cost = await recorder.async_add_executor_job(
+                get_last_statistics, self.hass, 1, cost_id, True, set()
+            )
+            if not has_cost:
+                # The cost statistic is new: import its full history.
+                first_day = today - timedelta(days=BACKFILL_DAYS)
+            else:
+                # Hours after the previous bill used an estimated rate. Price
+                # them again now that their bill can be closed.
+                first_day = min(first_day, bills[-1].start)
+
         reads = await self.api.async_get_usage(service, first_day, today, self._tz)
         if not reads:
             _LOGGER.debug("No %s usage since %s", SERVICE_KEYS[service], first_day)
             return last_start
+        reads = price_reads(reads, bills, self._tz)
 
         # The running sums continue from the newest statistic before the window.
         sums = {consumption_id: 0.0, cost_id: 0.0}
