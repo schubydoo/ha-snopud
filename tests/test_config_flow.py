@@ -58,6 +58,11 @@ async def test_user_flow_errors(hass: HomeAssistant, error, key) -> None:
         result = await hass.config_entries.flow.async_configure(result["flow_id"], USER)
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": key}
+    suggested = {
+        str(field): (field.description or {}).get("suggested_value")
+        for field in result["data_schema"].schema
+    }
+    assert suggested == {CONF_USERNAME: USER[CONF_USERNAME], CONF_PASSWORD: None}
     with (
         patch(LOGIN),
         patch("custom_components.snopud.async_setup_entry", return_value=True),
