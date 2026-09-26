@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MySnoPUD login",
+        "description": "Enter the email and password that you use on my.snopud.com.",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "MySnoPUD login failed",
+        "description": "The portal rejected the password for {username}. Enter the current password.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "The portal rejected the email or password.",
+      "extra_login_step": "The portal asked for an extra login step, such as a two-factor code or a security question. This integration cannot do that step.",
+      "cannot_connect": "Could not connect to my.snopud.com. Try again later.",
+      "unexpected_page": "The portal returned a page that the integration does not recognize. The portal possibly changed. Open an issue on GitHub.",
+      "unknown": "Unexpected error. Look in the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "The new password works."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "electric_last_reading": {
+        "name": "Latest electricity reading"
+      },
+      "water_last_reading": {
+        "name": "Latest water reading"
+      }
+    }
+  }
+}
