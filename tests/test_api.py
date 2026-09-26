@@ -1,23 +1,33 @@
 """Tests for the portal client."""
 
 from datetime import UTC, date, datetime
+import json
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 import pytest
+from pytest_homeassistant_custom_component.test_util.aiohttp import (
+    AiohttpClientMockResponse,
+)
+from yarl import URL
 
 from custom_components.snopud.api import (
+    Bill,
+    CannotConnect,
     ExtraLoginStep,
     InvalidAuth,
     PortalError,
     ServiceType,
     SessionExpired,
     SnoPUDClient,
+    UsageRead,
     form_fields,
     parse_ajax,
+    parse_bill_series,
     parse_properties,
     parse_usage_csv,
+    price_reads,
 )
 
 from .conftest import BASE, load, mock_login
@@ -201,3 +211,119 @@ async def test_get_usage_portal_rejects(hass: HomeAssistant, aioclient_mock) -> 
         await client.async_get_usage(
             ServiceType.WATER, date(2026, 1, 1), date(2026, 1, 2), TZ
         )
+
+
+class FakeChart:
+    """The portal's Charts view, which saves its settings for the account."""
+
+    def __init__(self, service: str, interval: str, usage_type: str) -> None:
+        """Start with the view that the user left."""
+        self.service, self.interval, self.usage_type = service, interval, usage_type
+
+    def register(self, aioclient_mock) -> None:
+        """Answer the chart requests from the current state."""
+        aioclient_mock.get(f"{BASE}/Dashboard/Chart", side_effect=self._page)
+        aioclient_mock.post(f"{BASE}/Dashboard/Chart/", side_effect=self._change)
+        aioclient_mock.get(f"{BASE}/Dashboard/ChartData", side_effect=self._data)
+        aioclient_mock.get(
+            f"{BASE}/Dashboard/SetServiceType", side_effect=self._set_service
+        )
+
+    async def _page(self, method, url, data):
+        html = load("chart_page.html")
+        for key, current in (
+            ("SERVICE_", self.service),
+            ("INTERVAL_", self.interval),
+            ("TYPE_", self.usage_type),
+        ):
+            for value in ("1", "2", "3", "5", "6", "7"):
+                marker = "current" if key == "SERVICE_" else "selected"
+                html = html.replace(f"{key}{value}", marker if value == current else "")
+        wrapper = {"AjaxResults": [{"Action": "Replace", "Value": html}], "Data": None}
+        return AiohttpClientMockResponse(method, url, text=json.dumps(wrapper))
+
+    async def _change(self, method, url, data):
+        fields = dict(reversed(data))
+        self.interval = fields["UsageInterval"]
+        # Like the portal: dollars exist only for billing periods.
+        self.usage_type = fields["UsageType"] if self.interval == "7" else "1"
+        return AiohttpClientMockResponse(method, url, text='{"AjaxResults":[]}')
+
+    async def _data(self, method, url, data):
+        name = "dollar" if self.usage_type == "3" else "consumption"
+        return AiohttpClientMockResponse(
+            method, url, text=load(f"chart_data_{name}.json")
+        )
+
+    async def _set_service(self, method, url, data):
+        self.service = url.query["ServiceType"]
+        return AiohttpClientMockResponse(method, url, status=302)
+
+
+@pytest.mark.parametrize("start_service", ["1", "2"])
+async def test_get_bills_restores_chart(
+    hass: HomeAssistant, aioclient_mock, start_service: str
+) -> None:
+    """Bills come from the billing chart, and the user's view comes back."""
+    chart = FakeChart(start_service, "6", "1")
+    chart.register(aioclient_mock)
+    client = SnoPUDClient(async_create_clientsession(hass), "user@example.com", "x")
+    bills = await client.async_get_bills(ServiceType.WATER)
+    assert bills == [
+        Bill(date(2026, 1, 6), date(2026, 2, 5), 50.0, 1000.0),
+        Bill(date(2026, 2, 6), date(2026, 3, 5), 30.0, 500.0),
+    ]
+    assert (chart.service, chart.interval, chart.usage_type) == (
+        start_service,
+        "6",
+        "1",
+    )
+
+
+async def test_get_bills_restores_chart_on_error(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    """A failed chart request still puts the user's view back."""
+    chart = FakeChart("1", "5", "1")
+    chart.register(aioclient_mock)
+    aioclient_mock._mocks.insert(
+        0,
+        AiohttpClientMockResponse(
+            "get", URL(f"{BASE}/Dashboard/ChartData"), status=500
+        ),
+    )
+    client = SnoPUDClient(async_create_clientsession(hass), "user@example.com", "x")
+    with pytest.raises(CannotConnect):
+        await client.async_get_bills(ServiceType.WATER)
+    assert (chart.service, chart.interval, chart.usage_type) == ("1", "5", "1")
+
+
+def test_parse_bill_series_checks_type() -> None:
+    """The portal answers in cubic feet when it has no dollars."""
+    data = json.loads(load("chart_data_consumption.json"))["Data"]
+    with pytest.raises(PortalError, match="Consumption"):
+        parse_bill_series(data, "Dollar")
+
+
+def test_price_reads() -> None:
+    """Each hour gets its bill's rate. Later hours use the last rate."""
+    bills = [
+        Bill(date(2026, 1, 6), date(2026, 2, 5), 50.0, 1000.0),
+        Bill(date(2026, 2, 6), date(2026, 3, 5), 30.0, 500.0),
+        Bill(date(2026, 3, 6), date(2026, 4, 5), 10.0, 0.0),
+    ]
+
+    def read(day: date, hour: int, cf: float) -> UsageRead:
+        return UsageRead(
+            datetime(day.year, day.month, day.day, hour, tzinfo=TZ), cf, None
+        )
+
+    reads = [
+        read(date(2026, 1, 1), 0, 10.0),  # before the first bill
+        read(date(2026, 2, 5), 23, 10.0),  # last hour of the first bill
+        read(date(2026, 2, 6), 0, 10.0),  # first hour of the second bill
+        read(date(2026, 3, 10), 0, 10.0),  # bill with no consumption
+    ]
+    costs = [r.cost for r in price_reads(reads, bills, TZ)]
+    assert costs == pytest.approx([0.5, 0.5, 0.6, 0.0])
+    assert price_reads(reads, [], TZ) == reads

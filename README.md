@@ -14,8 +14,9 @@ County PUD, Accelerated Innovations, or MyMeter.
 
 The integration logs in to MySnoPUD with your own email and password. It
 downloads the same hourly CSV files that the portal's "Download Usage Data"
-page gives you. It reads only. It never changes your account, pays bills, or
-submits anything other than the login and the download form.
+page gives you. For water cost, it also reads your bills in the portal's
+Charts view. It reads only. It never changes your account or pays bills. It
+submits only the login, the download form, and the chart settings.
 
 It creates these statistics for the property that is selected on your
 dashboard:
@@ -25,6 +26,7 @@ dashboard:
 | SnoPUD *property* electricity consumption | kWh | Grid consumption |
 | SnoPUD *property* electricity cost | USD | Cost of that consumption |
 | SnoPUD *property* water consumption | ft³ | Water source |
+| SnoPUD *property* water cost | USD | Cost of that water |
 
 It also creates two sensors, "Latest electricity reading" and "Latest water
 reading". Each one shows the start of the newest hour that the portal
@@ -52,6 +54,8 @@ published.
 4. For the cost, select "Use an entity tracking the total costs".
 5. Select "SnoPUD *property* electricity cost".
 6. Under "Water consumption", add "SnoPUD *property* water consumption".
+7. For the water cost, select "Use an entity tracking the total costs".
+8. Select "SnoPUD *property* water cost".
 
 ## How the import works
 
@@ -66,6 +70,14 @@ published.
   daylight saving time ends, the portal has no data for the first 1 AM hour.
   The integration places the portal's 1 AM row in the second (standard time)
   1 AM hour, which matches the portal's own Green Button export.
+- The CSV export has no water cost. The Charts view shows the dollars and the
+  cubic feet of each closed water bill. The integration divides the two to get
+  a rate for each bill. Each hour's cost is its cubic feet times that rate, so
+  the hours of a closed bill add up to the bill amount. Fixed monthly charges
+  are spread over the hours in the same way.
+- Hours after the newest bill use the rate of that bill as an estimate. When
+  the next bill closes, the integration prices those hours again with the new
+  rate.
 
 ## Limits
 
@@ -75,8 +87,11 @@ published.
 - The portal saves your last download settings. The integration selects the
   CSV format, the hourly interval, and all meters on each download. If you use
   the portal's download page, you will see these settings.
-- If you remove the "$" column in the portal's download settings, the cost
-  statistic stops updating.
+- If you remove the "$" column in the portal's download settings, the
+  electricity cost statistic stops updating.
+- The portal also saves your last Charts view. To read the water bills, the
+  integration switches the view to water, billing periods, and dollars. It
+  then puts back the service, interval, and type that you had.
 
 ## Privacy
 

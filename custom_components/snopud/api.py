@@ -7,8 +7,8 @@ imports, so that it can move to a separate library later.
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
-from datetime import date, datetime, tzinfo
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from enum import StrEnum
 from html.parser import HTMLParser
 import io
@@ -29,7 +29,15 @@ TIMEOUT = aiohttp.ClientTimeout(total=60)
 HOURLY = "5"
 FORMAT_CSV = "2"
 USAGE_CONSUMPTION = "1"
+USAGE_DOLLARS = "3"
+BILLING = "7"
 METER_FIELD = re.compile(r"Meters\[(\d+)\]\.Value")
+CHART_FORM = re.compile(
+    r'(?s)<form[^>]*class="[^"]*chartControlForm[^"]*"[^>]*>.*?</form>'
+)
+CHART_SERVICE = re.compile(
+    r'class="current setServiceTypeChartButton"\s+data-value="(\d+)"'
+)
 
 
 class SnoPUDError(Exception):
@@ -78,6 +86,16 @@ class UsageRead:
     start: datetime
     consumption: float
     cost: float | None
+
+
+@dataclass(frozen=True)
+class Bill:
+    """One closed billing period. `start` and `end` are both included."""
+
+    start: date
+    end: date
+    cost: float
+    consumption: float
 
 
 class _FormParser(HTMLParser):
@@ -247,6 +265,67 @@ def parse_usage_csv(text: str, tz: tzinfo) -> list[UsageRead]:
     ]
 
 
+def parse_bill_series(data: dict[str, Any], usage_type: str) -> dict[int, Any]:
+    """Return {x: point} for the billing chart's data series.
+
+    `data` is the `Data` object of a /Dashboard/ChartData response. The
+    first series is the range navigator. The second one holds one point
+    per billing period, keyed by `x`, with the period dates in `hs`.
+    `usage_type` is "Dollar" or "Consumption". The portal falls back to
+    consumption for intervals that have no dollars, so the value is
+    checked.
+    """
+    if data.get("usageType") != usage_type:
+        raise PortalError(f"Chart returned {data.get('usageType')!r}, not {usage_type}")
+    series = data.get("series") or []
+    if len(series) < 2:
+        raise PortalError("Chart data has no billing series")
+    return {
+        point["x"]: point
+        for point in series[1].get("data") or []
+        if isinstance(point, dict) and point.get("y") is not None
+    }
+
+
+def parse_bills(dollars: dict[int, Any], usage: dict[int, Any]) -> list[Bill]:
+    """Join the dollar and consumption series into bills, oldest first."""
+    bills = []
+    for x, point in sorted(dollars.items()):
+        if x not in usage or "hs" not in point:
+            continue
+        bills.append(
+            Bill(
+                start=datetime.strptime(point["hs"]["start"], "%m/%d/%Y").date(),
+                end=datetime.strptime(point["hs"]["end"], "%m/%d/%Y").date(),
+                cost=float(point["y"]),
+                consumption=float(usage[x]["y"]),
+            )
+        )
+    return bills
+
+
+def price_reads(
+    reads: list[UsageRead], bills: list[Bill], tz: tzinfo
+) -> list[UsageRead]:
+    """Give each read a cost from the rate of its bill.
+
+    The rate is bill cost / bill consumption, so the hourly costs of a
+    closed bill add up to that bill. A read uses the newest bill that
+    starts on or before its local day. Reads after the last bill use the
+    last rate until the next bill arrives. Reads before the first bill use
+    the first rate.
+    """
+    if not bills:
+        return reads
+    rates = [(b.start, b.cost / b.consumption if b.consumption else 0.0) for b in bills]
+    priced = []
+    for read in reads:
+        day = read.start.astimezone(tz).date()
+        rate = next((r for start, r in reversed(rates) if start <= day), rates[0][1])
+        priced.append(replace(read, cost=read.consumption * rate))
+    return priced
+
+
 class SnoPUDClient:
     """Log in to the portal and download usage.
 
@@ -397,3 +476,63 @@ class SnoPUDClient:
                 raise SessionExpired("Download: the portal asked for a new login")
             raise PortalError(f"Download returned {content_type!r}, not CSV")
         return parse_usage_csv(text, tz)
+
+    async def _chart_state(self) -> tuple[str | None, list[list[str]]]:
+        """Return the chart's service type and the fields of its forms."""
+        html, _ = await self._ajax("GET", "/Dashboard/Chart")
+        fields: list[list[str]] = []
+        for form in CHART_FORM.findall(html):
+            fields += form_fields(form)
+        if not fields:
+            raise PortalError("Chart form not found")
+        match = CHART_SERVICE.search(html)
+        return (match[1] if match else None), fields
+
+    async def _set_service(self, service: str) -> None:
+        await self._request(
+            "GET",
+            f"/Dashboard/SetServiceType?ServiceType={service}",
+            allow_redirects=False,
+        )
+
+    async def _set_chart(
+        self, fields: list[list[str]], interval: str, usage_type: str
+    ) -> None:
+        fields = [list(field) for field in fields]
+        set_field(fields, "UsageInterval", interval)
+        set_field(fields, "UsageType", usage_type)
+        await self._ajax("POST", "/Dashboard/Chart/", data=fields)
+
+    async def async_get_bills(self, service: ServiceType) -> list[Bill]:
+        """Return the closed bills of one service from the Charts view.
+
+        The CSV export has no water cost, but the chart shows cost per
+        billing period. The portal saves the chart view for the account, so
+        this method puts the service, interval and type back afterwards.
+        """
+        old_service, fields = await self._chart_state()
+        old_interval = get_field(fields, "UsageInterval") or BILLING
+        old_type = get_field(fields, "UsageType") or USAGE_DOLLARS
+        now = datetime.now(UTC)
+        query = (
+            f"/Dashboard/ChartData?unixTimeStart="
+            f"{int((now - timedelta(days=400)).timestamp() * 1000)}"
+            f"&unixTimeEnd={int((now + timedelta(days=1)).timestamp() * 1000)}"
+        )
+        try:
+            if old_service != service:
+                await self._set_service(service)
+                _, fields = await self._chart_state()
+            series = {}
+            for usage_type, name in (
+                (USAGE_DOLLARS, "Dollar"),
+                (USAGE_CONSUMPTION, "Consumption"),
+            ):
+                await self._set_chart(fields, BILLING, usage_type)
+                _, data = await self._ajax("GET", query)
+                series[name] = parse_bill_series(data, name)
+        finally:
+            await self._set_chart(fields, old_interval, old_type)
+            if old_service is not None and old_service != service:
+                await self._set_service(old_service)
+        return parse_bills(series["Dollar"], series["Consumption"])

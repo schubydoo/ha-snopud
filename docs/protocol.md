@@ -92,6 +92,38 @@ Times are local (America/Los_Angeles), with no offset, and mark the start of
 each interval. If the Meter column is selected, each meter gets its own row.
 The integration sums rows that share a start time.
 
+## Charts view (water cost)
+
+Tested on 2026-09-25. The CSV export has no cost column for water, but the
+Charts view shows water dollars per billing period.
+
+1. Send `GET /Dashboard/Chart` (XHR). The HTML has forms with the class
+   `chartControlForm`. They hold `UsageInterval`, `UsageType`, `meterIds`,
+   and the token. The current service is the
+   `<li class="current setServiceTypeChartButton" data-value="...">`.
+2. To change the service, send `GET /Dashboard/SetServiceType?ServiceType=2`.
+   The response is `302` to `/Dashboard`.
+3. To change the interval or the type, send all `chartControlForm` fields to
+   `POST /Dashboard/Chart/` (XHR).
+4. Send `GET /Dashboard/ChartData?unixTimeStart=<ms>&unixTimeEnd=<ms>` (XHR).
+   The wrapper's `Data` has `usageType` (`Dollar` or `Consumption`) and
+   `series`. The first series is the range navigator. The second series has
+   one point per bill, such as
+   `{"x": ..., "y": 50.00, "hs": {"start": "1/6/2026", "end": "2/5/2026"}}`.
+
+Findings:
+
+- Water dollars exist only with `UsageInterval=7` (billing). For hourly,
+  daily, and weekly intervals, the portal quietly sets `UsageType` back to
+  `1` and returns cubic feet. Always check `usageType` in the response.
+- The portal saves the chart's service, interval, and type for the account.
+  Put them back after reading.
+- A bill's cubic feet equal the sum of the hourly CSV rows from its start
+  date through its end date, both days included. So bill dollars divided by
+  bill cubic feet, applied to each hour, adds up to the bill exactly.
+- Only closed bills appear. The current period has no dollars until its bill
+  is issued.
+
 ## Answers to the early questions
 
 - Date range: one request for 400 days of hourly electric data, or 120 days
