@@ -1,0 +1,91 @@
+name: Changeset check
+
+# An advisory reminder for the changeset release model. It never blocks a merge.
+# Releases come only from `.changeset/*.md` fragments (knope.toml,
+# ignore_conventional_commits). A user-visible change with no fragment ships
+# with no changelog entry and no version bump. This check posts one sticky PR
+# comment and a warning annotation when a PR changes `custom_components/` and
+# adds no changeset. It is not a required check, and the job never fails. To opt
+# out for one PR, add the `no-changelog` label (CI, refactor, tests). It does
+# nothing until the `KNOPE_ENABLED` repo variable is `true`.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changeset-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changeset:
+    # Same-repo PRs only, because a fork PR gets a read-only token and cannot
+    # comment. Never on the release PR of knope, which deletes the changesets.
+    if: >-
+      ${{ vars.KNOPE_ENABLED == 'true'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.head_ref != 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write # post or update the sticky comment
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const marker = '<!-- changeset-check -->';
+            const done = `${marker}\nA changeset is present, the PR opted out, or it has no \`custom_components/\` change.`;
+            try {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner, repo, pull_number: pr.number, per_page: 100,
+              });
+              const hasChangeset = files.some(f => /^\.changeset\/.+\.md$/.test(f.filename));
+              const touchesCode = files.some(f => f.filename.startsWith('custom_components/'));
+
+              // Find the sticky comment before the opt-out test, so that a new
+              // no-changelog label can clear a warning that is already there.
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100,
+              });
+              const existing = comments.find(c => (c.body || '').includes(marker));
+
+              const optedOut = (pr.labels || []).map(l => l.name).includes('no-changelog');
+
+              if (optedOut || !touchesCode || hasChangeset) {
+                // Nothing to warn about. Change a stale warning to the done
+                // body, but only when the body is different.
+                if (existing && existing.body !== done) {
+                  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: done });
+                }
+                if (optedOut) core.info('no-changelog label set; no changeset required.');
+                return;
+              }
+
+              const body = [
+                marker,
+                '**No changeset found.** This PR changes `custom_components/` and adds no `.changeset/*.md` fragment.',
+                '',
+                'A change that a user can see needs a fragment. Without one, the change ships with',
+                'no changelog entry and no version bump. Run `knope document-change`, or commit a',
+                '`.changeset/<slug>.md` file with the front matter `default: patch|minor|major|perf|security`',
+                'and a one-line summary. See the "Changesets" section in `CONTRIBUTING.md`. For a PR with',
+                'no user-visible change (CI, refactor, tests), add the `no-changelog` label.',
+                '',
+                '_This check is advisory. It never blocks the merge._',
+              ].join('\n');
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+              }
+              core.warning('PR changes custom_components/ without a changeset. Add one, or add the no-changelog label.');
+            } catch (err) {
+              // Advisory check: never fail the job on a comment or API error.
+              core.warning(`changeset check skipped: ${err.message}`);
+            }

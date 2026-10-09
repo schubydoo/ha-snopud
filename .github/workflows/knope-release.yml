@@ -1,0 +1,68 @@
+name: Knope Release
+
+# The "publish" half of knope. When the `chore: prepare release X.Y.Z` PR merges,
+# knope creates the tag and the GitHub Release from the CHANGELOG notes. HACS
+# reads the GitHub Release, so this workflow builds nothing and uploads no asset.
+#
+# This workflow does nothing until the `KNOPE_ENABLED` repo variable is `true`.
+# It runs when the release PR (head branch `release`) merges, and it tags the
+# squash commit that landed on main. It needs the `ha-snopud-ci` App, and the
+# HA_SNOPUD_CI_CLIENT_ID and HA_SNOPUD_CI_APP_PRIVATE_KEY secrets.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch: # manual fallback: run from main after manifest.json holds the version
+
+permissions:
+  contents: read
+
+concurrency:
+  group: knope-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      ${{ vars.KNOPE_ENABLED == 'true'
+          && ((github.event_name == 'pull_request'
+               && github.event.pull_request.merged == true
+               && github.head_ref == 'release')
+              || (github.event_name == 'workflow_dispatch'
+                  && github.ref == 'refs/heads/main')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Mint ha-snopud-ci App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.HA_SNOPUD_CI_CLIENT_ID }}
+          private-key: ${{ secrets.HA_SNOPUD_CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Verify App token was minted
+        if: ${{ steps.app-token.outputs.token == '' }}
+        run: |
+          echo "::error::ha-snopud-ci App token mint produced an empty token; check the HA_SNOPUD_CI_CLIENT_ID / HA_SNOPUD_CI_APP_PRIVATE_KEY secrets and the App installation."
+          exit 1
+      # Tag the squash commit that landed on main (merge_commit_sha), not the
+      # orphaned PR head. Full history + tags for knope's version comparison.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install knope
+        uses: knope-dev/action@19617851f9f13ab2f27a05989c55efb18aca3675 # v2.1.2
+        with:
+          # renovate: datasource=github-releases depName=knope-dev/knope extractVersion=^knope/v(?<version>.+)$
+          version: 0.23.0
+      # knope creates the tag and the GitHub Release as the App. It does nothing
+      # if the version already has a release.
+      - name: Create the tag + GitHub Release
+        run: knope release --verbose
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

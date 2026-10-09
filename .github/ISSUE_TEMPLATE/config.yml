@@ -1,0 +1,4 @@
+blank_issues_enabled: false
+# No contact_links, as in lodger and scratchsmith. With private vulnerability
+# reporting on, GitHub adds its own "Report a security vulnerability" entry to
+# the chooser, and a second link here would duplicate it.
