@@ -4,6 +4,12 @@ knope writes this file from the fragments in `.changeset/`. Do not edit it by
 hand. The entries for 0.2.0 and earlier come from the GitHub release notes of
 those versions.
 
+## 0.2.1 (2026-10-09)
+
+### Fixes
+
+- The HACS metadata now states that the integration is for the United States ([#13](https://github.com/schubydoo/ha-snopud/pull/13))
+
 ## 0.2.0 (2026-09-26)
 
 ### Features
