@@ -1,0 +1,14 @@
+# Code owners for ha-snopud. https://docs.github.com/articles/about-code-owners
+#
+# GitHub requests a review from the owner on each matching PR. The branch rules
+# do not require a code owner review, because a project with one maintainer has
+# no second approver.
+
+* @schubydoo
+
+# Paths that Renovate and knope manage have no owner, so that a dependency PR or
+# a release PR does not request a review.
+/.github/workflows/
+/.pre-commit-config.yaml
+/requirements_test.txt
+/CHANGELOG.md

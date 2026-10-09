@@ -1,0 +1,59 @@
+# pre-commit hooks for ha-snopud. They run the same lint and format steps as CI.
+#
+#   commit stage : file hygiene, ruff, ruff format, changeset lint
+#   push stage   : the test suite
+#
+# Install them one time for each checkout:
+#
+#   uvx pre-commit install --install-hooks
+#
+# To skip one hook on purpose, set SKIP=<id> or use `git commit --no-verify`.
+minimum_pre_commit_version: "3.2.0"
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # The fixtures copy the bytes that the portal sends, and the brand images
+      # are binary. The whitespace hooks leave them alone.
+      - id: trailing-whitespace
+        exclude: '^(LICENSE|tests/fixtures/)'
+      - id: end-of-file-fixer
+        exclude: '^(LICENSE|tests/fixtures/)'
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: '^tests/fixtures/'
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  # Keep this rev the same as the ruff `version:` in .github/workflows/tests.yml.
+  # Renovate moves both in one PR.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: changeset-lint
+        name: changeset lint (front matter and a one-line body)
+        entry: sh scripts/lint-changesets.sh
+        language: system
+        files: '^\.changeset/.+\.md$'
+        pass_filenames: false
+
+      # The full suite before the code leaves the machine. It needs the venv
+      # from CONTRIBUTING.md.
+      - id: pytest
+        name: pytest
+        entry: .venv/bin/pytest -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

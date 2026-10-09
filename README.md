@@ -128,6 +128,9 @@ Test fixtures in `tests/fixtures/` are made up. Do not commit real portal
 responses, CSV downloads, or HAR files. They contain account numbers, meter
 numbers, addresses, and in the case of HAR files, your password.
 
+To send a change, read [CONTRIBUTING.md](CONTRIBUTING.md). The release notes
+are in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
