@@ -1,15 +1,16 @@
 # Claude review instructions
 
-Rules for the on-demand Claude reviewer (`.github/workflows/claude-review.yml`).
+Project rules for the on-demand Claude reviewer (`.github/workflows/claude-review.yml`,
+which calls the central job in `schubydoo/shared-workflows`).
 Ported from lodger. Only the project rules and a few examples are different.
 
 The workflow reads this file from the base branch, never from the pull request
 under review. A PR therefore cannot edit the rules that govern its own review.
 Keep it that way.
 
-To tune the reviewer, edit this file in a normal PR. Do not move these rules
-into the workflow YAML. If the workflow file is different from the copy on the
-default branch, `claude-code-action` refuses to run.
+To tune what the reviewer looks for, edit this file in a normal PR. How the
+review is posted is central: the shared workflow carries that recipe, and it
+wins on posting.
 
 Length has a cost. Rules that change review behavior belong here. General
 project context belongs in `AGENTS.md`.
@@ -121,58 +122,9 @@ first review, post Important findings only.
 
 ## Output
 
-- Post each line-specific finding as an inline comment, and group them all
-  into exactly one submitted review. Do not submit one review per finding.
-  Each inline comment becomes a thread that the maintainer answers and
-  resolves.
-- How to submit it, exactly. One POST carries the body and every anchor. It is
-  the only shape that both groups the findings and passes the tool
-  permissions:
-  1. Use the `Write` tool to create `review.json` in the workspace root. The
-     payload has four fields:
-     - `commit_id`: the PR head SHA, from `gh pr view <n> --json headRefOid`.
-     - `event`: `"COMMENT"`.
-     - `body`: the summary.
-     - `comments`: an array of `{path, line, side: "RIGHT", body}` entries,
-       one for each finding. Use `side: "LEFT"` only for a line that the diff
-       removes.
-  2. Run `gh api repos/<owner>/<repo>/pulls/<n>/reviews --input review.json`.
+The central workflow writes a posting recipe next to this file, and it governs how the review
+is posted: the grouped review, `review.json`, thread replies, the tally line and the allowed
+commands. Do not add posting rules here.
 
-  Each `line` must be a line that the diff touches, on that side. If one entry
-  names a line outside the diff, GitHub rejects the whole POST with 422. One
-  bad anchor then loses the body and every other finding. To flag an
-  unchanged line, anchor the comment to the nearest changed line and name the
-  real line in the comment body. If the POST returns 422, read `review.json`
-  again, correct that entry with `Write`, and repeat the same POST. Never
-  change to a shape that posts the findings one at a time.
-
-  Never post a standalone inline comment. GitHub wraps each standalone review
-  comment in a submitted review of its own, so each one splits the review.
-  `gh pr review` cannot attach inline comments. These are refused, so do not
-  try them:
-  - JSON inline on the command line
-  - shell redirects (`> file`)
-  - compound commands (`;`, `&&`, `||`)
-  - `python3`, `ls`, `git`
-- Put the summary table in the body of the submitted review, and nowhere
-  else. The table lists each finding with its file and line.
-- Do not repeat the findings in another place. Your final message becomes the
-  progress comment at the top of the PR. Keep it to the checklist, a one-line
-  verdict, and a pointer to the review.
-- Submit a COMMENT review. Never `REQUEST_CHANGES` and never `APPROVE`. This
-  reviewer is advisory and must not gate a merge.
-- Do not number findings as `#1`, `#2`. GitHub turns a hash plus digits into a
-  link to an unrelated issue or PR. Use "Finding 1" or a short description.
-- Link code with the full SHA and a line range:
-  `https://github.com/schubydoo/ha-snopud/blob/<full-sha>/custom_components/snopud/api.py#L40-L46`
-- The first line of the review body is the tally, in exactly this lowercase
-  form: `2 important, 3 nits`. For a count of 1, use the singular:
-  `1 important, 1 nit`. A clean review starts with `0 important, 0 nits`.
-  Nothing goes above that line. The guard step of the workflow parses it.
-- If a commit of the block fixes the issue fully, use a committable
-  `suggestion` block. If more work is necessary, describe the fix.
-- Findings keep their calibration. The reviewer runs with a plain English
-  output style that bans hedging modals (should, may, might, could) in
-  replies. That rule is about the register, not about confidence. Where a
-  claim is uncertain, say "may" or "might", or stay silent as the verification
-  bar says. Never promote a hedge to "must" to satisfy the style.
+Link code in this repo with the full SHA and a line range:
+`https://github.com/schubydoo/ha-snopud/blob/<full-sha>/custom_components/snopud/api.py#L40-L46`
