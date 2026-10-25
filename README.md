@@ -10,6 +10,8 @@ hours late.
 This project is not affiliated with, endorsed by, or supported by Snohomish
 County PUD, Accelerated Innovations, or MyMeter.
 
+Pass `--pilot-retry-limit <n>` to retry a failed step up to `n` times before the run exits.
+
 ## What it does
 
 The integration logs in to MySnoPUD with your own email and password. It
