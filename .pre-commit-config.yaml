@@ -35,7 +35,7 @@ repos:
   # Keep this rev the same as the ruff `version:` in .github/workflows/tests.yml.
   # Renovate moves both in one PR.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.2
+    rev: v0.17.3
     hooks:
       - id: ruff-check
       - id: ruff-format
