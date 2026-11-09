@@ -64,6 +64,19 @@ class SessionExpired(PortalError):
     """The portal sent the client back to the login page."""
 
 
+class HttpError(PortalError):
+    """The portal answered with a client error status, such as 400."""
+
+    def __init__(self, message: str, status: int) -> None:
+        """Store the HTTP status."""
+        super().__init__(message)
+        self.status = status
+
+
+class ServiceNotAvailable(PortalError):
+    """The account does not have this service, for example no water."""
+
+
 class ServiceType(StrEnum):
     """Portal service type codes."""
 
@@ -365,7 +378,7 @@ class SnoPUDClient:
                 if resp.status >= 500:
                     raise CannotConnect(f"{method} {path}: HTTP {resp.status}")
                 if resp.status >= 400:
-                    raise PortalError(f"{method} {path}: HTTP {resp.status}")
+                    raise HttpError(f"{method} {path}: HTTP {resp.status}", resp.status)
                 return str(resp.url), resp.headers.get("Content-Type", ""), text
         except (aiohttp.ClientError, TimeoutError) as err:
             raise CannotConnect(f"{method} {path}: {err!r}") from err
@@ -438,9 +451,18 @@ class SnoPUDClient:
             raise PortalError("Download form not found")
         if get_field(fields, "SelectedServiceType") != service:
             set_field(fields, "SelectedServiceType", service)
-            html, _ = await self._ajax(
-                "POST", "/Usage/UpdateDownloadSettings", data=fields
-            )
+            try:
+                html, _ = await self._ajax(
+                    "POST", "/Usage/UpdateDownloadSettings", data=fields
+                )
+            except HttpError as err:
+                # The portal answers 400 to a service that the account
+                # does not have, for example water on an electric-only account.
+                if err.status == 400:
+                    raise ServiceNotAvailable(
+                        f"The account has no service type {service}"
+                    ) from err
+                raise
             fields = form_fields(html, "/Usage/Download") or form_fields(html)
             if not fields:
                 raise PortalError(f"Could not switch to service type {service}")

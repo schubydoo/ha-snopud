@@ -18,6 +18,7 @@ from custom_components.snopud.api import (
     ExtraLoginStep,
     InvalidAuth,
     PortalError,
+    ServiceNotAvailable,
     ServiceType,
     SessionExpired,
     SnoPUDClient,
@@ -191,6 +192,37 @@ async def test_get_usage_session_expired(hass: HomeAssistant, aioclient_mock) ->
         await client.async_get_usage(
             ServiceType.WATER, date(2026, 1, 1), date(2026, 1, 2), TZ
         )
+
+
+async def test_get_usage_service_not_on_account(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    """HTTP 400 on the service switch means that the account has no such service."""
+    aioclient_mock.get(
+        f"{BASE}/Usage/InitializeDownloadSettings",
+        text=load("download_form_electric.json"),
+    )
+    aioclient_mock.post(f"{BASE}/Usage/UpdateDownloadSettings", status=400)
+    client = SnoPUDClient(async_create_clientsession(hass), "user@example.com", "x")
+    with pytest.raises(ServiceNotAvailable):
+        await client.async_get_usage(
+            ServiceType.WATER, date(2026, 1, 1), date(2026, 1, 2), TZ
+        )
+
+
+async def test_get_usage_other_http_error(hass: HomeAssistant, aioclient_mock) -> None:
+    """Other client errors on the service switch stay a PortalError."""
+    aioclient_mock.get(
+        f"{BASE}/Usage/InitializeDownloadSettings",
+        text=load("download_form_electric.json"),
+    )
+    aioclient_mock.post(f"{BASE}/Usage/UpdateDownloadSettings", status=403)
+    client = SnoPUDClient(async_create_clientsession(hass), "user@example.com", "x")
+    with pytest.raises(PortalError, match="HTTP 403") as err:
+        await client.async_get_usage(
+            ServiceType.WATER, date(2026, 1, 1), date(2026, 1, 2), TZ
+        )
+    assert not isinstance(err.value, ServiceNotAvailable)
 
 
 async def test_get_usage_portal_rejects(hass: HomeAssistant, aioclient_mock) -> None:

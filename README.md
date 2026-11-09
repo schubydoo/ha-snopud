@@ -30,7 +30,8 @@ dashboard:
 
 It also creates two sensors, "Latest electricity reading" and "Latest water
 reading". Each one shows the start of the newest hour that the portal
-published.
+published. If your account has only one service, for example electricity
+only, the integration imports that service and creates only its sensor.
 
 ## Requirements
 
