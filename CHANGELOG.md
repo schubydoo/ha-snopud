@@ -4,6 +4,12 @@ knope writes this file from the fragments in `.changeset/`. Do not edit it by
 hand. The entries for 0.2.0 and earlier come from the GitHub release notes of
 those versions.
 
+## 0.2.2 (2026-11-09)
+
+### Fixes
+
+- Accounts without water service (or without electric service) now load, and the integration skips the service that the account does not have ([#67](https://github.com/schubydoo/ha-snopud/pull/67))
+
 ## 0.2.1 (2026-10-09)
 
 ### Fixes
