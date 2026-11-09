@@ -33,6 +33,7 @@ from .api import (
     InvalidAuth,
     PortalError,
     Property,
+    ServiceNotAvailable,
     ServiceType,
     SnoPUDClient,
     price_reads,
@@ -87,6 +88,8 @@ class SnoPUDCoordinator(DataUpdateCoordinator[SnoPUDData]):
             config_entry.data[CONF_PASSWORD],
         )
         self._tz: tzinfo | None = None
+        # Services that the account does not have. Found on the first update.
+        self._missing: set[ServiceType] = set()
 
     async def _async_update_data(self) -> SnoPUDData:
         """Log in, then import each service."""
@@ -100,7 +103,20 @@ class SnoPUDCoordinator(DataUpdateCoordinator[SnoPUDData]):
             prop = self.api.properties[0]
             data = SnoPUDData(property=prop)
             for service in ServiceType:
-                data.last_reading[service] = await self._import_service(prop, service)
+                if service in self._missing:
+                    continue
+                try:
+                    data.last_reading[service] = await self._import_service(
+                        prop, service
+                    )
+                except ServiceNotAvailable:
+                    _LOGGER.info(
+                        "The account has no %s service, so it is skipped",
+                        SERVICE_NAMES[service],
+                    )
+                    self._missing.add(service)
+            if not data.last_reading:
+                raise UpdateFailed("The account has no electric or water service")
         except (InvalidAuth, ExtraLoginStep) as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except (CannotConnect, PortalError) as err:

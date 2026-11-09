@@ -21,6 +21,7 @@ from custom_components.snopud.api import (
     InvalidAuth,
     PortalError,
     Property,
+    ServiceNotAvailable,
     ServiceType,
     UsageRead,
 )
@@ -113,6 +114,7 @@ async def test_first_import_then_update(
     state = hass.states.get("sensor.snopud_main_house_latest_electricity_reading")
     assert state is not None
     assert datetime.fromisoformat(state.state) == start + timedelta(hours=47)
+    assert hass.states.get("sensor.snopud_main_house_latest_water_reading")
 
     # The portal corrects the second day and adds a third day.
     usage[ServiceType.ELECTRIC] = hours(
@@ -258,3 +260,51 @@ async def test_water_cost_failure_keeps_consumption(
     stats = await _stats(hass, {WATER, WATER_COST})
     assert stats[WATER][-1]["sum"] == pytest.approx(96.0)
     assert WATER_COST not in stats
+
+
+async def test_account_without_water(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    client,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An electric-only account loads, and later updates skip water."""
+    freezer.move_to("2026-09-25 20:00:00+00:00")
+    start = datetime(2026, 9, 20, 7, tzinfo=UTC)
+    elec = hours(start, [1.0] * 48, cost=True)
+
+    def usage(service, *args):
+        if service is ServiceType.WATER:
+            raise ServiceNotAvailable("no water")
+        return elec
+
+    client.async_get_usage = AsyncMock(side_effect=usage)
+    client.async_get_bills.side_effect = PortalError("no water chart")
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+
+    stats = await _stats(hass, {ELEC, WATER})
+    assert stats[ELEC][-1]["sum"] == pytest.approx(48.0)
+    assert WATER not in stats
+    assert hass.states.get("sensor.snopud_main_house_latest_electricity_reading")
+    assert not hass.states.get("sensor.snopud_main_house_latest_water_reading")
+
+    client.async_get_usage.reset_mock()
+    client.async_get_bills.reset_mock()
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert entry.runtime_data.last_update_success
+    services = [call.args[0] for call in client.async_get_usage.call_args_list]
+    assert services == [ServiceType.ELECTRIC]
+    client.async_get_bills.assert_not_called()
+
+
+async def test_account_without_any_service(
+    recorder_mock: Recorder, hass: HomeAssistant, entry: MockConfigEntry, client
+) -> None:
+    """With no service at all, setup retries later."""
+    client.async_get_usage = AsyncMock(side_effect=ServiceNotAvailable("none"))
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    assert entry.state is ConfigEntryState.SETUP_RETRY

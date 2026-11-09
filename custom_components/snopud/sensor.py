@@ -20,9 +20,11 @@ async def async_setup_entry(
     entry: SnoPUDConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add one sensor per service."""
+    """Add one sensor per service that the account has."""
+    coordinator = entry.runtime_data
     async_add_entities(
-        SnoPUDLastReadingSensor(entry.runtime_data, service) for service in ServiceType
+        SnoPUDLastReadingSensor(coordinator, service)
+        for service in coordinator.data.last_reading
     )
 
 

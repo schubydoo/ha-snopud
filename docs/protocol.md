@@ -53,7 +53,10 @@ integration uses `data-property-id` in its statistic IDs.
    HTML of `<form id="downloadOptions" action="/Usage/Download">`.
 2. If `SelectedServiceType` is not the wanted service, change it and send the
    form to `POST /Usage/UpdateDownloadSettings` (XHR). Parse the new form from
-   the response, because the meter list changes.
+   the response, because the meter list changes. If the account does not have
+   the service, the portal answers HTTP 400. A user with an electric-only
+   account reported this for water. The integration then skips that service
+   until the next reload.
 3. Set the fields, then send `POST /Usage/PresentDownloadErrors` (XHR). The
    reply `{"AjaxResults":[],"Data":null}` means that there are no errors.
 4. Send the same fields to `POST /Usage/Download`. The response is `text/csv`.
